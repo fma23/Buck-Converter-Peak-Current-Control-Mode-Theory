@@ -1,0 +1,412 @@
+//###########################################################################
+//
+// FILE:   divide_main.c
+//
+// TITLE:  Division: Newton Raphson Approximation Example
+//
+//! \addtogroup f2806x_example_cla_list
+//! <h1> Division: Newton Raphson Approximation</h1>
+//!
+//! In this example, Task 1 of the CLA will divide two input numbers using
+//! multiple approximations in the Newton Raphson method
+//!
+//! \b Watch \b Variables \n
+//! - Num - Numerator of input
+//! - Den - Denominator of input
+//! - Res - Result of the division operation
+//
+//###########################################################################
+// $TI Release: F2806x Support Library v2.04.00.00 $
+// $Release Date: Tue Jun 26 03:13:59 CDT 2018 $
+// $Copyright:
+// Copyright (C) 2009-2018 Texas Instruments Incorporated - http://www.ti.com/
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+//
+//   Redistributions of source code must retain the above copyright
+//   notice, this list of conditions and the following disclaimer.
+//
+//   Redistributions in binary form must reproduce the above copyright
+//   notice, this list of conditions and the following disclaimer in the
+//   documentation and/or other materials provided with the
+//   distribution.
+//
+//   Neither the name of Texas Instruments Incorporated nor the names of
+//   its contributors may be used to endorse or promote products derived
+//   from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// $
+//###########################################################################
+
+//
+// Included Files
+//
+#include "DSP28x_Project.h"     // DSP28x Headerfile
+#include "F2806x_Cla_defines.h"  
+#include "BoostHardware.h"
+#include "stdio.h"
+
+// Include the test header file whose name is based on the test name
+// which is defined by the macro TEST on the command line
+//
+#include XSTRINGIZE(XCONCAT(TEST_NAME,_shared.h))
+
+
+extern Uint16 RamfuncsLoadStart;
+extern Uint16 RamfuncsLoadEnd;
+extern Uint16 RamfuncsRunStart;
+extern Uint16 RamfuncsLoadSize;
+
+
+// CLA ISRs
+//
+__interrupt void cla1_task1_isr(void);
+__interrupt void cla1_task2_isr(void);
+__interrupt void cla1_task3_isr(void);
+__interrupt void cla1_task4_isr(void);
+__interrupt void cla1_task5_isr(void);
+__interrupt void cla1_task6_isr(void);
+__interrupt void cla1_task7_isr(void);
+__interrupt void cla1_task8_isr(void);
+__interrupt void epwm1_timer_isr(void);
+__interrupt void adc_isr(void);
+
+//
+// These are defined by the linker file and used to copy
+// the CLA code from its load address to its run address
+// in CLA program memory
+//
+extern Uint16 Cla1funcsLoadStart;
+extern Uint16 Cla1funcsLoadEnd;
+extern Uint16 Cla1funcsLoadSize;
+extern Uint16 Cla1funcsRunStart;
+extern Uint16 Cla1Prog_Start;
+
+//
+// These are defined by the linker file and used to copy
+// the CLA math tables from its load address to its run address
+// into one of the CLA data RAMs
+//
+extern Uint16 Cla1mathTablesLoadStart;
+extern Uint16 Cla1mathTablesLoadEnd;
+extern Uint16 Cla1mathTablesLoadSize;
+extern Uint16 Cla1mathTablesRunStart;
+
+
+volatile Uint16 ADCValueChannel10;
+
+
+void main(void)
+{
+
+  // Step 1: Setup the system clock
+  // Disable the watchdog timer, initialize the system clock,
+  // PLL and configure the peripheral clock.
+  InitSysCtrl();
+
+#ifdef FLASH
+// Copy time critical code and Flash setup code to RAM
+// The  RamfuncsLoadStart, RamfuncsLoadEnd, and RamfuncsRunStart
+// symbols are created by the linker. Refer to the linker files.
+    MemCopy(&RamfuncsLoadStart, &RamfuncsLoadEnd, &RamfuncsRunStart);
+
+// Call Flash Initialization to setup flash waitstates
+// This function must reside in RAM
+    InitFlash();    // Call the flash wrapper init function
+#endif //(FLASH)
+
+
+    Gpio_select();
+
+    //Initialize PIE control
+    // Intialize PIE control, disable all interrupts and
+    // then copy over the PIE Vector table from BootROM to RAM
+     DINT;                                      //Disable CPU Interrupts
+     InitPieCtrl();
+     IER = 0x00000000;
+     IFR = 0x00000000;
+     InitPieVectTable();
+
+     // Assign user defined ISR to the PIE vector table
+     EALLOW;
+     PieVectTable.ADCINT1  = &adc_isr;
+     PieVectTable.CLA1_INT1  = &cla1_task1_isr;
+     PieVectTable.CLA1_INT2  = &cla1_task2_isr;
+     PieVectTable.CLA1_INT3  = &cla1_task3_isr;
+     PieVectTable.CLA1_INT4  = &cla1_task4_isr;
+     PieVectTable.CLA1_INT5  = &cla1_task5_isr;
+     PieVectTable.CLA1_INT6  = &cla1_task6_isr;
+     PieVectTable.CLA1_INT7  = &cla1_task7_isr;
+     PieVectTable.CLA1_INT8  = &cla1_task8_isr;
+     EDIS;
+
+     // Configure ADC
+     InitAdc();
+
+
+     /* Configure PWM*/
+      PWMs_Config();
+
+      /* Configure ADC */
+      ADC_Config();
+
+     /* Enable ADCINT1 in PIE */
+     PieCtrlRegs.PIEIER1.bit.INTx1 = 1;/* Enable INT 1.1 in the PIE */
+     IER |= M_INT1;/* Enable CPU Interrupt 1 */
+
+     PieCtrlRegs.PIEIER11.all       = 0xFFFF;
+     IER |= M_INT11;
+
+     EINT;/* Enable Global interrupt INTM */
+     ERTM;/* Enable Global realtime interrupt DBGM */
+
+
+//     /* Configure PWM*/
+//     PWMs_Config();
+//
+//     /* Configure ADC */
+//     ADC_Config();
+
+    // Compute all CLA task vectors
+    EALLOW;
+    Cla1Regs.MVECT1 = (Uint16)((Uint32)&Cla1Task1 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT2 = (Uint16)((Uint32)&Cla1Task2 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT3 = (Uint16)((Uint32)&Cla1Task3 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT4 = (Uint16)((Uint32)&Cla1Task4 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT5 = (Uint16)((Uint32)&Cla1Task5 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT6 = (Uint16)((Uint32)&Cla1Task6 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT7 = (Uint16)((Uint32)&Cla1Task7 -(Uint32)&Cla1Prog_Start);
+    Cla1Regs.MVECT8 = (Uint16)((Uint32)&Cla1Task8 -(Uint32)&Cla1Prog_Start);
+    EDIS;
+
+    // Step 3 : Mapping CLA tasks
+    // All tasks are enabled and will be started by an ePWM trigger
+    // Map CLA program memory to the CLA and enable software breakpoints
+    EALLOW;
+    Cla1Regs.MPISRCSEL1.bit.PERINT1SEL  = CLA_INT1_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT2SEL  = CLA_INT2_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT3SEL  = CLA_INT3_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT4SEL  = CLA_INT4_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT5SEL  = CLA_INT5_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT6SEL  = CLA_INT6_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT7SEL  = CLA_INT7_NONE;
+    Cla1Regs.MPISRCSEL1.bit.PERINT8SEL  = CLA_INT8_NONE;
+    Cla1Regs.MIER.all                   = 0x00FF;
+    EDIS;
+
+
+    // Switch the CLA program space to the CLA and enable software forcing
+    // Also switch over CLA data ram 0,1 and 2
+    // CAUTION: The RAMxCPUE bits can only be enabled by writing to the 
+    // register and not the individual bit field. Furthermore, the status of 
+    // these bitfields is not reflected in either the watch or register views - 
+    // they always read as zeros. This is a known bug and the user is advised 
+    // to test CPU accessibilty first before proceeding
+    //
+    EALLOW;
+    Cla1Regs.MMEMCFG.all = CLA_PROG_ENABLE|CLARAM0_ENABLE|CLARAM1_ENABLE|
+                           CLARAM2_ENABLE|CLA_RAM1CPUE;
+    Cla1Regs.MCTL.bit.IACKE = 1;
+    EDIS;
+
+
+
+    while(1)
+    {
+      test_run();
+      test_report();
+
+    //  printf("ADC Value is = %d\n",ADCValueChannel10);
+
+      DELAY_US(1000000);
+    }
+
+
+
+#if HARDWARE
+    {
+        __asm(" ESTOP0");
+    }
+#endif
+}
+
+
+
+
+
+
+// Function arguments defined as:
+//-------------------------------
+// n =      Target ePWM module, 1,2,...16.  e.g. if n=2, then target is ePWM2
+// period = PWM period in Sysclks
+// mode =   Master/Slave mode, e.g. mode=1 for master, mode=0 for slave
+// phase =  phase offset from upstream master in Sysclks,
+//          applicable only if mode=0, i.e. slave
+
+void PWM_CNF(int16 n, int16 period, int16 mode, int16 phase)
+{
+
+    // Time Base SubModule Registers
+    (*ePWM[n]).TBCTL.bit.CTRMODE = TB_COUNT_UP;
+    (*ePWM[n]).TBCTL.bit.PRDLD = TB_IMMEDIATE;  // set Immediate load
+    (*ePWM[n]).TBPRD = period-1;                    // PWM frequency = 1 / period
+    (*ePWM[n]).TBPHS.half.TBPHS = 0;
+    (*ePWM[n]).TBCTR = 0;
+    (*ePWM[n]).TBCTL.bit.HSPCLKDIV = TB_DIV1;
+    (*ePWM[n]).TBCTL.bit.CLKDIV = TB_DIV1;
+
+    if(mode == 1) // config as a Master
+    {
+        (*ePWM[n]).TBCTL.bit.PHSEN = TB_DISABLE;
+        (*ePWM[n]).TBCTL.bit.SYNCOSEL = TB_CTR_ZERO; // sync "down-stream"
+    }
+    if(mode == 0) // config as a Slave (Note: Phase+2 value used to compensate for logic delay)
+    {
+        (*ePWM[n]).TBCTL.bit.PHSEN = TB_ENABLE;
+        (*ePWM[n]).TBCTL.bit.SYNCOSEL = TB_SYNC_IN;
+
+        if ((0 <= phase)&&(phase <= 2))
+            (*ePWM[n]).TBPHS.half.TBPHS = (2-phase);
+        else if (phase > 2)
+            (*ePWM[n]).TBPHS.half.TBPHS = (period-phase+2);
+    }
+
+    // Counter Compare Submodule Registers
+    (*ePWM[n]).CMPA.half.CMPA = 225;              // set duty 0% initially
+    (*ePWM[n]).CMPB= 25;              // set duty 0% initially
+    (*ePWM[n]).CMPCTL.bit.SHDWAMODE = CC_SHADOW;
+    (*ePWM[n]).CMPCTL.bit.LOADAMODE = CC_CTR_PRD;
+
+    // Action Qualifier SubModule Registers
+    (*ePWM[n]).AQCTLA.bit.ZRO = AQ_SET;
+    (*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;
+
+
+    (*ePWM[n]).AQCTLB.bit.ZRO = AQ_SET;      // Set PWM1B on Zero
+    (*ePWM[n]).AQCTLB.bit.CBU = AQ_CLEAR;    // Clear PWM1B on event B, up count
+
+//    (*ePWM[n]).AQCTLB.bit.ZRO = AQ_NO_ACTION;
+//    (*ePWM[n]).AQCTLB.bit.CAU = AQ_NO_ACTION;
+//    (*ePWM[n]).AQCTLB.bit.PRD = AQ_NO_ACTION;
+
+    // Configure SOC event generation at PWM level
+    (*ePWM[n]).ETSEL.bit.SOCAEN  =  1;
+    (*ePWM[n]).ETSEL.bit.SOCASEL =  ET_CTR_ZERO; // Use CTR = ZRO events as trigger
+    (*ePWM[n]).ETPS.bit.SOCAPRD = 1;             // Generate pulse on 1st event
+
+    (*ePWM[n]).ETSEL.bit.SOCAEN  =  1;
+    (*ePWM[n]).ETSEL.bit.SOCASEL =  ET_CTR_ZERO; // Use CTR = ZRO events as trigger
+    (*ePWM[n]).ETPS.bit.SOCAPRD = 1;             // Generate pulse on 1st event
+
+
+}
+//
+// CLA ISRs
+//
+__interrupt void
+cla1_task1_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task2_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task3_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task4_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task5_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task6_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task7_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+cla1_task8_isr(void)
+{
+    PieCtrlRegs.PIEACK.bit.ACK11 = 1;
+}
+
+__interrupt void
+adc_isr(void)
+{
+    static Uint8 counter=0;
+
+    ADCValueChannel10 = AdcResult.ADCRESULT0;
+
+     if(counter==100)
+     {
+     GpioDataRegs.GPBTOGGLE.bit.GPIO39=0;
+     counter=0;
+     }
+     else
+     {
+       GpioDataRegs.GPBTOGGLE.bit.GPIO39=1;
+       counter++;
+     }
+
+     AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;/* Clr ADCINT1 flag for next SOC */
+     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;/* Acknowledge interrupt to PIE */
+}
+/*********************************************************************************************
+// This function will copy the specified memory contents from
+// one location to another.
+//
+//  Uint16 *SourceAddr        Pointer to the first word to be moved
+//                          SourceAddr < SourceEndAddr
+//  Uint16* SourceEndAddr     Pointer to the last word to be moved
+//  Uint16* DestAddr          Pointer to the first destination word
+//
+// No checks are made for invalid memory locations or that the
+// end address is > then the first start address.
+*********************************************************************************************/
+void MemCopy(Uint16 *SourceAddr, Uint16* SourceEndAddr, Uint16* DestAddr)
+{
+    while(SourceAddr < SourceEndAddr)
+    {
+       *DestAddr++ = *SourceAddr++;
+    }
+    return;
+}
+
+//
+// End of File
+//
+
